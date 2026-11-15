@@ -21,13 +21,9 @@
 
 #include "ElegantDebug.h"
 
-
-
 #if (DEBUG_PLATFORM_RA || DEBUG_PLATFORM_TI)
 volatile uint32_t _debug_tick_ms = 0;
 #endif
-
-
 
 #if DEBUG_PLATFORM_STM32
 static UART_HandleTypeDef *_huart = NULL;
@@ -40,8 +36,6 @@ static UART_Regs *_uart_inst = NULL;
 static bool _timestamp_enabled = true;
 static bool _color_enabled = true;
 static bool _filename_line_enabled = false;
-
-
 
 #if DEBUG_PLATFORM_STM32
 void debug_init(UART_HandleTypeDef *huart, bool enable_timestamp, bool enable_color, bool enable_filename_line) {
@@ -64,15 +58,22 @@ void debug_init(UART_Regs *uart_inst, bool enable_timestamp, bool enable_color, 
     _color_enabled = enable_color;
     _filename_line_enabled = enable_filename_line;
 }
+#elif DEBUG_PLATFORM_8051
+void debug_init(unsigned char dummy_uart, bool enable_timestamp, bool enable_color, bool enable_filename_line) {
+    (void)dummy_uart;
+    _timestamp_enabled = enable_timestamp;
+    _color_enabled = enable_color;
+    _filename_line_enabled = enable_filename_line;
+}
 #endif
-
-
 
 static uint32_t _getTick(void) {
 #if DEBUG_PLATFORM_STM32
     return HAL_GetTick();
 #elif (DEBUG_PLATFORM_RA || DEBUG_PLATFORM_TI)
     return _debug_tick_ms;
+#elif DEBUG_PLATFORM_8051
+    return 0;
 #endif
 }
 
@@ -86,10 +87,9 @@ void debug_onTxComplete(uart_callback_args_t *p_args) {
 }
 #endif
 
-
+#if !DEBUG_PLATFORM_8051
 
 static void _send(const char* text) {
-
     #if DEBUG_PLATFORM_STM32
         #if (USB_AS_DEBUG_PORT == 1)
             if (text == NULL) return;
@@ -117,10 +117,8 @@ static void _send(const char* text) {
         if (pos >= sizeof(out)) pos = 0; // guard
     }
 
-    /* append text safely */
     if (pos < sizeof(out)) {
         size_t remain = sizeof(out) - pos;
-        /* leave room for null terminator */
         strncpy(out + pos, text, (remain > 0) ? (remain - 1) : 0);
         out[sizeof(out) - 1] = '\0';
     }
@@ -153,8 +151,6 @@ static void _send(const char* text) {
     #endif
 }
 
-
-
 void debug_log(const char* format, ...) {
     char msg[DEBUG_BUFFER_LEN];
     va_list args;
@@ -175,22 +171,6 @@ void debug_logWithType(const char* type, const char* style, const char* format, 
     snprintf(combined, sizeof(combined), "\033[1m%s[%s]\033[0m %s", style, type, msg);
     _send(combined);
 }
-
-// void debug_logWithType_fileline(const char* file, int line, const char* type, const char* format, ...) {
-//     char msg[DEBUG_BUFFER_LEN];
-//     va_list args;
-//     va_start(args, format);
-//     vsnprintf(msg, sizeof(msg), format, args);
-//     va_end(args);
-//
-//     char combined[DEBUG_BUFFER_LEN + 96];
-//     if (_filename_line_enabled) {
-//         snprintf(combined, sizeof(combined), "\033[1m[%s]\033[0m [%s:%ld] %s", type, file, line, msg);
-//     } else {
-//         snprintf(combined, sizeof(combined), "\033[1m[%s]\033[0m %s", type, msg);
-//     }
-//     _send(combined);
-// }
 
 void debug_error_fileline(const char* file, int line, const char* format, ...) {
     char msg[DEBUG_BUFFER_LEN];
@@ -265,7 +245,113 @@ void debug_info(const char* format, ...) {
     _send(combined);
 }
 
+const char* customTextColor(uint8_t r, uint8_t g, uint8_t b) {
+    static char ansi[24];
+    snprintf(ansi, sizeof(ansi), "\033[38;2;%u;%u;%um", (unsigned)r, (unsigned)g, (unsigned)b);
+    return ansi;
+}
 
+const char* customBgColor(uint8_t r, uint8_t g, uint8_t b) {
+    static char ansi[24];
+    snprintf(ansi, sizeof(ansi), "\033[48;2;%u;%u;%um", (unsigned)r, (unsigned)g, (unsigned)b);
+    return ansi;
+}
+
+#else
+// 8051 专属实现，解决内存溢出
+
+// 定义一个共享的 IDATA 缓冲区，存放字符串。
+// 省去了每个函数都定义 char msg[64] 导致的 DATA 空间爆炸问题。
+idata char _elegant_msg_buf[64];
+
+static void _send(const char* text) {
+    unsigned int i;
+    if (text == NULL) return;
+    for(i = 0; text[i] != '\0'; i++) {
+        SBUF = text[i];
+        while(!TI);
+        TI = 0;
+    }
+}
+
+void debug_log(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsprintf(_elegant_msg_buf, format, args);
+    va_end(args);
+    _send(_elegant_msg_buf);
+}
+
+void debug_logWithType(const char* type, const char* style, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsprintf(_elegant_msg_buf, format, args);
+    va_end(args);
+    _send(style);
+    _send("[");
+    _send(type);
+    _send("] ");
+    _send(_elegant_msg_buf);
+}
+
+void debug_error_fileline(const char* file, int line, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsprintf(_elegant_msg_buf, format, args);
+    va_end(args);
+    _send(_color_enabled ? ERROR_TYPE : ERROR_TYPE_PLAIN);
+    _send(_elegant_msg_buf);
+}
+
+void debug_warning_fileline(const char* file, int line, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsprintf(_elegant_msg_buf, format, args);
+    va_end(args);
+    _send(_color_enabled ? WARNING_TYPE : WARNING_TYPE_PLAIN);
+    _send(_elegant_msg_buf);
+}
+
+void debug_ok(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsprintf(_elegant_msg_buf, format, args);
+    va_end(args);
+    _send(_color_enabled ? OK_TYPE : OK_TYPE_PLAIN);
+    _send(_elegant_msg_buf);
+}
+
+void debug_success(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsprintf(_elegant_msg_buf, format, args);
+    va_end(args);
+    _send(_color_enabled ? SUCCESS_TYPE : SUCCESS_TYPE_PLAIN);
+    _send(_elegant_msg_buf);
+}
+
+void debug_info(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsprintf(_elegant_msg_buf, format, args);
+    va_end(args);
+    _send(_color_enabled ? INFO_TYPE : INFO_TYPE_PLAIN);
+    _send(_elegant_msg_buf);
+}
+
+const char* customTextColor(uint8_t r, uint8_t g, uint8_t b) {
+    static char ansi[24];
+    sprintf(ansi, "\033[38;2;%u;%u;%um", (unsigned)r, (unsigned)g, (unsigned)b);
+    return ansi;
+}
+
+const char* customBgColor(uint8_t r, uint8_t g, uint8_t b) {
+    static char ansi[24];
+    sprintf(ansi, "\033[48;2;%u;%u;%um", (unsigned)r, (unsigned)g, (unsigned)b);
+    return ansi;
+}
+
+#endif // DEBUG_PLATFORM_8051
 
 void debug_setTimestampEnabled(bool enabled) {
     _timestamp_enabled = enabled;
@@ -277,19 +363,4 @@ void debug_setColorEnabled(bool enabled) {
 
 void debug_setFilenameLineEnabled(bool enabled) {
     _filename_line_enabled = enabled;
-}
-
-
-
-// runtime helpers for 24‑bit ANSI colours; return a pointer to a static buffer
-const char* customTextColor(uint8_t r, uint8_t g, uint8_t b) {
-    static char ansi[24];
-    snprintf(ansi, sizeof(ansi), "\033[38;2;%u;%u;%um", (unsigned)r, (unsigned)g, (unsigned)b);
-    return ansi;
-}
-
-const char* customBgColor(uint8_t r, uint8_t g, uint8_t b) {
-    static char ansi[24];
-    snprintf(ansi, sizeof(ansi), "\033[48;2;%u;%u;%um", (unsigned)r, (unsigned)g, (unsigned)b);
-    return ansi;
 }
