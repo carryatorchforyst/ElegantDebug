@@ -56,7 +56,7 @@
 // #define USE_STM32_HAL    // STM32Cube HAL
 // #define USE_RA_FSP       // Renesas RA FSP
 // #define USE_TI_MSPM0_DL  // TI MSPM0 DL (Driver Library)
-
+#define USE_8051
 
 
 // USB / UART choices:
@@ -87,6 +87,11 @@
     #define DEBUG_PLATFORM_STM32  0
     #define DEBUG_PLATFORM_RA     0
     #define DEBUG_PLATFORM_TI     1
+#elif defined(USE_8051)               
+    #define DEBUG_PLATFORM_STM32  0
+    #define DEBUG_PLATFORM_RA     0
+    #define DEBUG_PLATFORM_TI     0
+    #define DEBUG_PLATFORM_8051   1       
 #else
     #error "Please define USE_STM32_HAL / USE_RA_FSP / USE_TI_MSPM0_DL macro before including ElegantDebug.h"
 #endif
@@ -149,13 +154,28 @@
     #endif
 #endif
 
+#if DEBUG_PLATFORM_8051
+#include <reg52.h>
+#endif
 
-
+#if !DEBUG_PLATFORM_8051
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#else
+#define bool unsigned char
+#define true 1
+#define false 0
+typedef unsigned char uint8_t;
+typedef unsigned int uint16_t;
+typedef unsigned long uint32_t;
+#define vsnprintf(buf, size, fmt, ap) vsprintf(buf, fmt, ap)
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#endif
 
 /* ANSI escape codes for output *****************************************/
 
@@ -256,6 +276,8 @@ void debug_init(uart_instance_t const *uart, bool enable_timestamp, bool enable_
 #elif DEBUG_PLATFORM_TI
 // Initialize the library; MUST be called before other functions.
 void debug_init(UART_Regs *uart_inst, bool enable_timestamp, bool enable_color, bool enable_filename_line);
+#elif DEBUG_PLATFORM_8051
+void debug_init(unsigned char dummy_uart, bool enable_timestamp, bool enable_color, bool enable_filename_line); 
 #endif
 
 #if (DEBUG_PLATFORM_RA || DEBUG_PLATFORM_TI)
@@ -299,8 +321,10 @@ const char* customTextColor(uint8_t r, uint8_t g, uint8_t b);
 const char* customBgColor(uint8_t r, uint8_t g, uint8_t b);
 
 // Macros to automatically pass caller file/line
+#if !DEBUG_PLATFORM_8051
 #define debug_error(...)                debug_error_fileline(__FILE__, __LINE__, __VA_ARGS__)
 #define debug_warning(...)              debug_warning_fileline(__FILE__, __LINE__, __VA_ARGS__)
+#endif
 // #define debug_logWithType(type, ...) debug_logWithType_fileline(__FILE__, __LINE__, (type), __VA_ARGS__)
 
 #ifdef __cplusplus
